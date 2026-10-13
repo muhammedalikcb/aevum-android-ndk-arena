@@ -124,13 +124,22 @@ jlongArray nMhAttach(JNIEnv* env, jclass, jlong arenaPtr) {
 inline aev_mheap* M(jlong p) { return reinterpret_cast<aev_mheap*>(p); }
 void  nMhClose(JNIEnv*, jclass, jlong p) { aev_mh_close(M(p)); }
 jlong nMhAlloc(JNIEnv*, jclass, jlong p, jint t) { return static_cast<jlong>(aev_mh_alloc(M(p), static_cast<uint32_t>(t))); }
+// A view may cover at most the object's allocated payload. A negative size, or
+// one past the object, would let Kotlin touch the next object or, at the end of
+// a semispace, memory past the mapping.
+inline bool viewFits(jlong p, jlong ref, jint size) {
+  return size >= 0 &&
+         static_cast<uint64_t>(size) <= aev_mh_capacity(M(p), static_cast<aev_handle>(ref));
+}
 jobject nMhRead(JNIEnv* env, jclass, jlong p, jlong ref, jint size) {
+  if (!viewFits(p, ref, size)) return nullptr;
   void* q = aev_mh_read(M(p), static_cast<aev_handle>(ref));
   return q ? env->NewDirectByteBuffer(q, size) : nullptr;
 }
 jobject nMhBeginWrite(JNIEnv* env, jclass, jlong p, jlong ref, jint size) {
+  // Always begin: on a null return the Kotlin side still calls mhEndWrite.
   void* q = aev_mh_begin_write(M(p), static_cast<aev_handle>(ref));
-  return q ? env->NewDirectByteBuffer(q, size) : nullptr;
+  return q && viewFits(p, ref, size) ? env->NewDirectByteBuffer(q, size) : nullptr;
 }
 void  nMhEndWrite(JNIEnv*, jclass, jlong p) { aev_mh_end_write(M(p)); }
 jint  nMhSetRoot(JNIEnv*, jclass, jlong p, jint i, jlong ref) { return aev_mh_set_root(M(p), static_cast<uint32_t>(i), static_cast<aev_handle>(ref)); }

@@ -105,9 +105,19 @@ void ManagedHeap::restoreLiveFromCommit(int slot) noexcept {
 
 Status ManagedHeap::attach(Arena* backing, ManagedHeap* out) noexcept {
   if (!backing || !backing->valid() || !out) return Status::kInvalidArg;
+  const uint64_t ds = backing->dataStart();
+  const uint64_t rb = backing->regionBytes();
+  const uint64_t hdr_bytes = alignUp(sizeof(ManagedHeader), kCacheLine);
+  if (ds > rb || rb - ds < hdr_bytes) return Status::kCorrupt;
   auto* base = static_cast<uint8_t*>(backing->mutableBase());
-  auto* h = reinterpret_cast<ManagedHeader*>(base + backing->dataStart());
+  auto* h = reinterpret_cast<ManagedHeader*>(base + ds);
   if (h->magic != kManagedMagic) return Status::kCorrupt;
+  // The ref bounds checks trust this geometry, so make sure both semispaces sit
+  // after the header and inside the mapping, laid out exactly as create() does.
+  if (h->space_bytes == 0 || h->space_off[0] < ds + hdr_bytes || h->space_off[0] > rb ||
+      h->space_bytes > (rb - h->space_off[0]) / 2 ||
+      h->space_off[1] != h->space_off[0] + h->space_bytes)
+    return Status::kCorrupt;
   out->backing_ = backing;
   out->hdr_ = h;
   const int slot = out->newestValidCommit();
@@ -194,8 +204,24 @@ inline uint8_t* followFwd(uint8_t* payload) noexcept {
 }  // namespace
 
 void* ManagedHeap::resolveRead(ManagedRef ref) noexcept {
-  if (ref.isNull()) return nullptr;
+  if (!refInHeap(ref)) return nullptr;
   return followFwd(base() + ref.off);
+}
+
+uint64_t ManagedHeap::payloadBytes(ManagedRef ref) const noexcept {
+  if (!refInHeap(ref)) return 0;
+  const uint64_t bytes = alignUp(TypeRegistry::fixedSize(headerAt(ref.off)->type_id), 16);
+  const uint32_t space = (ref.off >= hdr_->space_off[1]) ? 1u : 0u;
+  const uint64_t end = hdr_->space_off[space] + hdr_->space_bytes;
+  return bytes <= end - ref.off ? bytes : 0;
+}
+
+bool ManagedHeap::refFieldOk(ManagedRef ref, uint32_t field_offset) const noexcept {
+  const uint64_t bytes = payloadBytes(ref);
+  if (bytes < kRefFieldBytes || field_offset > bytes - kRefFieldBytes ||
+      (field_offset % kRefFieldBytes) != 0)
+    return false;
+  return TypeRegistry::isRefField(headerAt(ref.off)->type_id, field_offset);
 }
 
 void* ManagedHeap::beginWrite(ManagedRef ref) noexcept {
@@ -206,7 +232,7 @@ void* ManagedHeap::beginWrite(ManagedRef ref) noexcept {
   // the write to to-space, so no write can land in from-space during evacuation.
   MutatorContext* m = mutatorSelf();
   if (m) m->in_write.fetch_add(1, std::memory_order_seq_cst);
-  if (ref.isNull()) return nullptr;
+  if (!refInHeap(ref)) return nullptr;   // still counted: the caller pairs with endWrite()
 
   CycleContext* c = activeCycle().load(std::memory_order_acquire);
   if (c != nullptr && c->phase.load(std::memory_order_seq_cst) >= Phase::kEvac) {
@@ -228,6 +254,7 @@ void ManagedHeap::endWrite() noexcept {
 
 Status ManagedHeap::setRoot(uint32_t idx, ManagedRef ref) noexcept {
   if (!valid() || idx >= kManagedRoots) return Status::kInvalidArg;
+  if (!ref.isNull() && !refInHeap(ref)) return Status::kInvalidArg;
   hdr_->live_root[idx].store(ref.off, std::memory_order_release);
   return Status::kOk;
 }

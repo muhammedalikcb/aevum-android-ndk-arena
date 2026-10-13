@@ -117,7 +117,7 @@ class ManagedHeap {
 
   // READ pointer: canonical payload (follows forwarding during a cycle). Reads
   // never race the compactor (from-space is read-only for the whole cycle), so
-  // no scope is needed for reading.
+  // no scope is needed for reading. Returns null for a ref that fails refInHeap().
   void* resolveRead(ManagedRef ref) noexcept;
 
   // WRITE access is scoped: a WriteScope evacuates-on-write (so the write always
@@ -126,8 +126,28 @@ class ManagedHeap {
   // this object's space - while a write to it is outstanding. This is what keeps
   // an app write from straddling a compaction. Hold a WriteScope only for the
   // duration of the write; do not cache its pointer.
-  void* beginWrite(ManagedRef ref) noexcept;  // -> canonical ptr; pair with endWrite()
+  void* beginWrite(ManagedRef ref) noexcept;  // -> canonical ptr (null if !refInHeap); pair with endWrite()
   void endWrite() noexcept;
+
+  // Bounds checks for refs, view sizes and field offsets that arrive from
+  // outside the engine (the C ABI and JNI). They are a few compares each and
+  // read only the immutable heap geometry plus the object's header.
+  //
+  // refInHeap: `ref` is 16-aligned and its header and payload start lie inside
+  // the two semispaces. Null fails.
+  bool refInHeap(ManagedRef ref) const noexcept {
+    if (!valid()) return false;
+    const uint64_t lo = hdr_->space_off[0] + sizeof(ObjectHeader);
+    const uint64_t hi = hdr_->space_off[0] + 2 * hdr_->space_bytes;
+    return (ref.off & 15) == 0 && ref.off >= lo && ref.off < hi;
+  }
+  // Allocated payload bytes of the object at `ref` (its registered size rounded
+  // up to 16), or 0 if `ref` fails refInHeap() or the size would run past the
+  // end of its semispace.
+  uint64_t payloadBytes(ManagedRef ref) const noexcept;
+  // True if `field_offset` names a whole, aligned reference field inside the
+  // object at `ref` that its type registered as a reference.
+  bool refFieldOk(ManagedRef ref, uint32_t field_offset) const noexcept;
 
   Status setRoot(uint32_t idx, ManagedRef ref) noexcept;
   ManagedRef getRoot(uint32_t idx) noexcept;
