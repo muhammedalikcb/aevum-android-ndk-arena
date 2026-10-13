@@ -48,13 +48,28 @@ Aevum is written in C++. The risks and mitigations are:
   fixed size classes. A Kotlin view of an arena block is sized by `capacityOf`,
   which first checks the handle against `data_start` and the block's alloc magic,
   and returns no view if either check fails.
-* Bounds and offsets, managed heap. Here v1.0 trusts its caller more than the raw
-  arena does. The `MRef` passed to `read`/`write`, the byte size passed with it,
-  and the field offsets passed to `registerLayout`, `readRef` and `writeRef` are
-  not checked against the object's registered size or the region bounds. A wrong
-  size or offset can read or write past the object, and near the end of the region
-  past the mapping itself. Treat type layouts, sizes and offsets as trusted
-  constants of your own code, and never derive them from external input.
+* Bounds and offsets, managed heap. Values coming in through the C ABI and JNI
+  are checked before any memory is touched:
+  * `registerLayout` rejects a size of 0 or above `0x7FFFFFF0`, more than 32
+    reference fields, and any offset that is not 8-aligned, does not fit a whole
+    8-byte field inside the declared size, or is repeated. A rejected call keeps
+    the earlier layout for that type.
+  * An `MRef` must be 16-aligned and lie inside the two semispaces, or `read`,
+    `write` and `setRoot` fail.
+  * The size passed to `read`/`write` must not be negative or larger than the
+    object's allocated payload (its registered size rounded up to 16), so the
+    view stays inside the object and the mapping.
+  * `readRef`/`writeRef` accept only an offset the type registered as a reference
+    field (for a type traced by native code, any aligned field inside the
+    object), and `writeRef` rejects a child `MRef` outside the heap.
+  * On `attach`, the semispace layout stored in the region header is checked
+    against the mapping.
+
+  Failures return `AEV_INVALID_ARG` (an `AevumException` in Kotlin), or
+  `MRef.NULL` from `readRef`, without touching the object. Each check is a few
+  compares. They catch a wrong size or offset, but not a forged `MRef` that is in
+  bounds and still does not point at the start of an object, so only use refs the
+  heap gave you.
 * Concurrency. The compaction engine is clean under ThreadSanitizer,
   AddressSanitizer and UndefinedBehaviorSanitizer on the full concurrent workload
   at 8→64 threads (see [WHITEPAPER §6](docs/WHITEPAPER.md)). Memory ordering is
@@ -62,7 +77,7 @@ Aevum is written in C++. The risks and mitigations are:
   proven with a Dekker argument.
 * Signal handler (dirty tracker, opt-in). The handler is async-signal-safe: for a
   fault inside an Aevum range it does only atomic updates and a single `mprotect`.
-  It does not save and restore `errno` (`mprotect` only sets it on failure). For
+  It saves `errno` on entry and restores it on every exit path. For
   faults outside Aevum's ranges it chains to the app's previous `SIGSEGV`/`SIGBUS`
   handler, so it never swallows a genuine crash. If the dirty tracker is not
   enabled, no handler is installed.
@@ -88,8 +103,9 @@ Aevum is written in C++. The risks and mitigations are:
 * Untrusted regions. Treat a region from an untrusted source as hostile input. The
   header magic, version and CRC are validated, but a crafted region could still
   encode an object graph that is malicious for the *app's* own logic, and the
-  managed heap does not validate the offsets stored inside it (§3). Only attach
-  regions your app created.
+  managed heap does not validate the self-relative offsets stored inside its
+  objects (§3 covers only values passed in by the caller). Only attach regions
+  your app created.
 
 ## 5. Denial-of-service bounds
 

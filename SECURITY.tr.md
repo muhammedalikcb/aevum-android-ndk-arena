@@ -49,14 +49,30 @@ Aevum C++ ile yazıldı. Riskler ve önlemler şöyle:
   `capacityOf` ile belirlenir. `capacityOf` önce handle'ı `data_start`'a ve bloğun
   alloc magic değerine karşı kontrol eder; iki kontrolden biri başarısız olursa
   view döndürülmez.
-* Sınırlar ve offset'ler, yönetilen heap. v1.0 burada çağırana ham arenadan daha
-  çok güvenir. `read`/`write`'a verilen `MRef`, onunla birlikte verilen bayt
-  boyutu ve `registerLayout`, `readRef`, `writeRef`'e verilen alan offset'leri,
-  nesnenin kayıtlı boyutuna ya da bölge sınırlarına göre kontrol edilmez. Yanlış
-  bir boyut ya da offset nesnenin dışını okuyabilir veya yazabilir; bölgenin
-  sonuna yakın bir yerde eşlemenin kendisinin de dışına çıkabilir. Tip
-  yerleşimlerini, boyutları ve offset'leri kendi kodunuzdaki güvenilir sabitler
-  olarak tutun ve asla dış girdiden türetmeyin.
+* Sınırlar ve offset'ler, yönetilen heap. C ABI ve JNI üzerinden gelen değerler,
+  belleğe dokunulmadan önce kontrol edilir:
+  * `registerLayout`; 0 olan ya da `0x7FFFFFF0`'ı aşan boyutları, 32'den fazla
+    referans alanını ve 8 bayta hizalı olmayan, beyan edilen boyutun içine tam
+    bir 8 baytlık alan sığdıramayan ya da tekrar eden her offset'i reddeder.
+    Reddedilen bir çağrı, o tip için önceki yerleşimi korur.
+  * Bir `MRef` 16 bayta hizalı olmalı ve iki semispace'in içinde kalmalıdır;
+    aksi halde `read`, `write` ve `setRoot` başarısız olur.
+  * `read`/`write`'a verilen boyut negatif olamaz ve nesnenin ayrılmış
+    payload'ından (kayıtlı boyutun 16'nın katına yuvarlanmış hali) büyük olamaz.
+    Böylece view hem nesnenin hem de eşlemenin içinde kalır.
+  * `readRef`/`writeRef` yalnızca tipin referans alanı olarak kaydettiği
+    offset'leri kabul eder (native kodla trace edilen bir tipte nesnenin içindeki
+    hizalı herhangi bir alanı). `writeRef` ayrıca heap dışındaki bir alt `MRef`'i
+    reddeder.
+  * `attach` sırasında bölge başlığında saklanan semispace yerleşimi eşlemeye
+    göre kontrol edilir.
+
+  Hatalı bir çağrı nesneye dokunmadan `AEV_INVALID_ARG` (Kotlin'de
+  `AevumException`) ya da `readRef`'ten `MRef.NULL` döndürür. Her kontrol birkaç
+  karşılaştırmadan ibarettir. Bu kontroller yanlış bir boyutu ya da offset'i
+  yakalar, ama sınırların içinde kalıp yine de bir nesnenin başını göstermeyen
+  sahte bir `MRef`'i yakalamaz; bu yüzden yalnızca heap'in size verdiği ref'leri
+  kullanın.
 * Eşzamanlılık. Sıkıştırma motoru, 8→64 thread'te tam eşzamanlı iş yükü altında
   ThreadSanitizer, AddressSanitizer ve UndefinedBehaviorSanitizer ile temizdir
   (bkz. [WHITEPAPER §6](docs/WHITEPAPER.tr.md)). Bellek sıralaması açıkça
@@ -64,8 +80,8 @@ Aevum C++ ile yazıldı. Riskler ve önlemler şöyle:
   Dekker argümanıyla ispatlanmıştır.
 * Sinyal handler'ı (dirty tracker, opt-in). Handler async-signal-safe'tir: Aevum
   aralığındaki bir fault için yalnızca atomik güncellemeler ve tek bir `mprotect`
-  yapar. `errno`'yu kaydedip geri yüklemez (`mprotect` onu yalnızca hata
-  durumunda değiştirir). Aevum'un aralıkları dışındaki fault'larda uygulamanın
+  yapar. `errno`'yu girişte kaydeder ve her çıkış yolunda geri yükler. Aevum'un
+  aralıkları dışındaki fault'larda uygulamanın
   önceki `SIGSEGV`/`SIGBUS` handler'ına zincirlenir, yani gerçek bir çökmeyi asla
   yutmaz. Dirty tracker açılmazsa hiçbir handler kurulmaz.
 * JNI. Native metotlar `RegisterNatives` ile bağlanır, dolayısıyla çözülmesi
@@ -91,8 +107,9 @@ Aevum C++ ile yazıldı. Riskler ve önlemler şöyle:
 * Güvenilmeyen bölgeler. Güvenilmeyen bir kaynaktan gelen bölgeyi düşmanca girdi
   olarak ele alın. Başlıktaki magic, sürüm ve CRC doğrulanır, ama özel olarak
   hazırlanmış bir bölge yine de *uygulamanın* kendi mantığı için zararlı bir nesne
-  grafiği içerebilir; yönetilen heap de içinde saklanan offset'leri doğrulamaz
-  (§3). Yalnızca kendi uygulamanızın oluşturduğu bölgelere bağlanın.
+  grafiği içerebilir; yönetilen heap de nesnelerinin içinde saklanan göreli
+  offset'leri doğrulamaz (§3 yalnızca çağıranın verdiği değerleri kapsar).
+  Yalnızca kendi uygulamanızın oluşturduğu bölgelere bağlanın.
 
 ## 5. Hizmet reddi (DoS) sınırları
 

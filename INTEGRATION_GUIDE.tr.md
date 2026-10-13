@@ -113,9 +113,11 @@ val next  = heap.readRef(head, OFF_NEXT)    // bir kenarı takip et (forwarding 
 val value = heap.read(head, SIZE).getLong(0)
 ```
 
-Burada verdiğiniz offset'ler ve boyutlar v1.0'da native tarafta sınır kontrolünden
-geçmez (bkz. [`SECURITY.tr.md`](SECURITY.tr.md), §3). Onları kayıtlı yerleşimle
-uyumlu sabitler olarak tutun.
+Burada verdiğiniz offset'ler ve boyutlar native tarafta kayıtlı yerleşime ve
+nesnenin boyutuna göre kontrol edilir; hatalı olanlar bir `AevumException` ile
+reddedilir (`readRef` ise `MRef.NULL` döndürür; bkz.
+[`SECURITY.tr.md`](SECURITY.tr.md), §3). Yine de onları kayıtlı yerleşimle uyumlu
+sabitler olarak tutun.
 
 ---
 
