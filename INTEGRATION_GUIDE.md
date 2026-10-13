@@ -111,9 +111,10 @@ val next  = heap.readRef(head, OFF_NEXT)    // follow an edge (forwarding-safe)
 val value = heap.read(head, SIZE).getLong(0)
 ```
 
-The offsets and sizes you pass here are not bounds-checked by the native side in
-v1.0 (see [`SECURITY.md`](SECURITY.md), §3). Keep them as constants that match the
-registered layout.
+The native side checks the offsets and sizes you pass here against the registered
+layout and the object's size, and rejects bad ones with an `AevumException`
+(`readRef` returns `MRef.NULL`; see [`SECURITY.md`](SECURITY.md), §3). Still keep
+them as constants that match the registered layout.
 
 ---
 
