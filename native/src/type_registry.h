@@ -24,6 +24,12 @@ namespace aevum {
 
 inline constexpr uint32_t kMaxTypes = 1024;
 inline constexpr uint32_t kMaxRefFields = 32;  // reference fields per layout-registered type
+// Largest payload a layout-registered type may declare. The Kotlin side sizes
+// views and offsets with Int, so anything above INT32_MAX (rounded down to the
+// 16-byte payload alignment) is a caller bug, e.g. a negative jint.
+inline constexpr uint32_t kMaxObjectBytes = 0x7FFF'FFF0u;
+// A reference field is one 64-bit self-relative word (see self_healing_ptr.h).
+inline constexpr uint32_t kRefFieldBytes = 8;
 
 // Per-managed-object header. Sits immediately before the user payload; the
 // payload therefore stays 16-byte aligned. Every field here is either
@@ -81,9 +87,24 @@ class TypeRegistry {
   // Register a type by the byte offsets of its SelfHealingOffsetPtr fields. This
   // is the reflection-free path a managed runtime (Kotlin/JNI) uses: it need only
   // report where the pointers are. A built-in generic trace walks the offsets.
+  //
+  // Everything is validated before the slot is touched, so a rejected call
+  // leaves any earlier registration of `type_id` intact. Each offset must be
+  // 8-aligned, lie wholly inside `fixed_size`, and appear only once (a repeated
+  // offset would make the compactor rebase that field twice).
   static Status registerLayout(uint32_t type_id, const uint32_t* offsets,
                                uint32_t count, uint32_t fixed_size) noexcept {
     if (type_id >= kMaxTypes || count > kMaxRefFields) return Status::kInvalidArg;
+    if (fixed_size == 0 || fixed_size > kMaxObjectBytes) return Status::kInvalidArg;
+    if (count != 0 && offsets == nullptr) return Status::kInvalidArg;
+    for (uint32_t i = 0; i < count; ++i) {
+      const uint32_t o = offsets[i];
+      if (fixed_size < kRefFieldBytes || o > fixed_size - kRefFieldBytes ||
+          (o % kRefFieldBytes) != 0)
+        return Status::kInvalidArg;
+      for (uint32_t j = 0; j < i; ++j)
+        if (offsets[j] == o) return Status::kInvalidArg;
+    }
     Slot& s = slots()[type_id];
     for (uint32_t i = 0; i < count; ++i) s.offsets[i] = offsets[i];
     s.num_offsets = count;

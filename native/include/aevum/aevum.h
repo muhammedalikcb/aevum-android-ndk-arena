@@ -76,7 +76,10 @@ AEV_API uint64_t   aev_bytes_in_use(aev_arena* a);
 typedef struct aev_mheap aev_mheap;
 
 /* Register a managed type: `offsets` are the byte offsets of the object's
- * self-healing reference fields; `size` is the payload size. Idempotent. */
+ * self-healing reference fields; `size` is the payload size. Idempotent.
+ * Returns AEV_INVALID_ARG (and leaves any earlier registration untouched) if
+ * `size` is 0 or above 0x7FFFFFF0, `count` exceeds 32, or an offset is not
+ * 8-aligned, does not fit a whole 8-byte field inside `size`, or is repeated. */
 AEV_API int32_t   aev_mh_register_layout(uint32_t type_id, const uint32_t* offsets,
                                          uint32_t count, uint32_t size);
 
