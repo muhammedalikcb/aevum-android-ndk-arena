@@ -32,10 +32,13 @@ class ManagedHeap private constructor(
 
     fun alloc(typeId: Int): MRef = MRef(AevumNative.mhAlloc(p(), typeId))
 
-    /** Zero-copy read view of the object's payload (native byte order). */
+    /**
+     * Zero-copy read view of the object's payload (native byte order). Throws if
+     * [ref] is not in the heap or [sizeBytes] is negative or past the object.
+     */
     fun read(ref: MRef, sizeBytes: Int): ByteBuffer =
         (AevumNative.mhRead(p(), ref.handle, sizeBytes)
-            ?: throw AevumException(AEV_INVALID_ARG, "read of a null/invalid MRef"))
+            ?: throw AevumException(AEV_INVALID_ARG, "read($sizeBytes) of a null/invalid MRef or past the object"))
             .order(ByteOrder.nativeOrder())
 
     /**
@@ -45,7 +48,7 @@ class ManagedHeap private constructor(
      */
     fun <T> write(ref: MRef, sizeBytes: Int, block: (ByteBuffer) -> T): T {
         val buf = AevumNative.mhBeginWrite(p(), ref.handle, sizeBytes)
-            ?: run { AevumNative.mhEndWrite(p()); throw AevumException(AEV_INVALID_ARG, "write of a null/invalid MRef") }
+            ?: run { AevumNative.mhEndWrite(p()); throw AevumException(AEV_INVALID_ARG, "write($sizeBytes) of a null/invalid MRef or past the object") }
         try {
             return block(buf.order(ByteOrder.nativeOrder()))
         } finally {
@@ -53,15 +56,25 @@ class ManagedHeap private constructor(
         }
     }
 
-    /** Follow the reference field at [fieldOffset] to the child (or [MRef.NULL]). */
+    /**
+     * Follow the reference field at [fieldOffset] to the child (or [MRef.NULL]).
+     * Also returns [MRef.NULL] if [fieldOffset] is not a registered reference field.
+     */
     fun readRef(ref: MRef, fieldOffset: Int): MRef = MRef(AevumNative.mhReadRef(p(), ref.handle, fieldOffset))
 
-    /** Set the reference field at [fieldOffset]. Goes through the write barrier. */
+    /**
+     * Set the reference field at [fieldOffset]. Goes through the write barrier.
+     * Throws if [fieldOffset] is not a registered reference field of [ref].
+     */
     fun writeRef(ref: MRef, fieldOffset: Int, child: MRef) {
-        AevumNative.mhWriteRef(p(), ref.handle, fieldOffset, child.handle)
+        val s = AevumNative.mhWriteRef(p(), ref.handle, fieldOffset, child.handle)
+        if (s != AEV_OK) throw AevumException(s, "writeRef(+$fieldOffset): ${statusName(s)}")
     }
 
-    fun setRoot(index: Int, ref: MRef) { AevumNative.mhSetRoot(p(), index, ref.handle) }
+    fun setRoot(index: Int, ref: MRef) {
+        val s = AevumNative.mhSetRoot(p(), index, ref.handle)
+        if (s != AEV_OK) throw AevumException(s, "setRoot($index): ${statusName(s)}")
+    }
     fun getRoot(index: Int): MRef = MRef(AevumNative.mhGetRoot(p(), index))
 
     /** Trigger one concurrent compaction cycle (usually run on a background thread). */
