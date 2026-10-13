@@ -125,6 +125,9 @@ class SelfHealingRefBase {
 };
 static_assert(sizeof(SelfHealingRefBase) == sizeof(int64_t),
               "reference must be one 64-bit word for stable on-region layout");
+static_assert(sizeof(SelfHealingRefBase) == kRefFieldBytes &&
+              alignof(SelfHealingRefBase) == kRefFieldBytes,
+              "TypeRegistry validates field offsets against this size and alignment");
 
 // Typed convenience wrapper. get()/set() carry the barriers; the payload type T
 // is the user's object struct.
