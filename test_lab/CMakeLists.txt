@@ -5,6 +5,9 @@
 # multi-process LMKD/reattach simulator in two flavours:
 #   lmkd_simulator          - Release (the flavour that produces the proof numbers)
 #   lmkd_simulator_asan     - ASan + UBSan (correctness under the same workload)
+# plus focused single-process engine checks (C ABI bounds validation, errno in
+# the fault handler) in the same two flavours:
+#   engine_checks / engine_checks_asan
 #
 # Standalone use:
 #   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
@@ -36,10 +39,16 @@ set(LAB_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/trace_emitter.cpp
 )
 
+set(CHECKS_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/engine_checks.cpp
+    ${AEVUM_NATIVE}/src/aevum_c.cpp
+)
+
 find_package(Threads REQUIRED)
 
+# aevum_lab_target(<name> <sources...>): one lab binary over the core engine.
 function(aevum_lab_target name)
-  add_executable(${name} ${LAB_SRC} ${AEVUM_CORE_SRC})
+  add_executable(${name} ${ARGN} ${AEVUM_CORE_SRC})
   target_include_directories(${name} PRIVATE
       ${AEVUM_NATIVE}/src
       ${AEVUM_NATIVE}/include
@@ -54,11 +63,20 @@ function(aevum_lab_target name)
 endfunction()
 
 # Release: the flavour whose numbers go into the proof report.
-aevum_lab_target(lmkd_simulator)
+aevum_lab_target(lmkd_simulator ${LAB_SRC})
 target_compile_options(lmkd_simulator PRIVATE -O2)
 
 # ASan + UBSan: same multi-process workload, memory/UB checked.
-aevum_lab_target(lmkd_simulator_asan)
+aevum_lab_target(lmkd_simulator_asan ${LAB_SRC})
 target_compile_options(lmkd_simulator_asan PRIVATE
     -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined)
 target_link_options(lmkd_simulator_asan PRIVATE -fsanitize=address,undefined)
+
+# Engine checks, same two flavours.
+aevum_lab_target(engine_checks ${CHECKS_SRC})
+target_compile_options(engine_checks PRIVATE -O2)
+
+aevum_lab_target(engine_checks_asan ${CHECKS_SRC})
+target_compile_options(engine_checks_asan PRIVATE
+    -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined)
+target_link_options(engine_checks_asan PRIVATE -fsanitize=address,undefined)

@@ -17,20 +17,21 @@
 # EVERY number printed below is parsed from the simulator's actual stdout. This
 # script computes nothing and invents nothing.
 #
-# Usage: ./run_headless_lab.sh [-o outdir] [--asan] [--keep]
+# Usage: ./run_headless_lab.sh [-o outdir] [--asan] [--keep] [--sweep]
 set -euo pipefail
 
 LAB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # test_lab/
 HERE="$(cd "$LAB/.." && pwd)"                        # repo root
 OUTDIR="$LAB"
 FLAVOUR="lmkd_simulator"
+CHECKS="engine_checks"
 KEEP=0
 SWEEP=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) OUTDIR="$2"; shift 2 ;;
-    --asan) FLAVOUR="lmkd_simulator_asan"; shift ;;
+    --asan) FLAVOUR="lmkd_simulator_asan"; CHECKS="engine_checks_asan"; shift ;;
     --keep) KEEP=1; shift ;;
     --sweep) SWEEP=1; shift ;;
     *) echo "usage: $0 [-o outdir] [--asan] [--keep] [--sweep]"; exit 2 ;;
@@ -60,10 +61,25 @@ BUILD="$LAB/build"
 info "configuring + building ($FLAVOUR)…"
 cmake -S "$LAB" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null \
   || die "cmake configure failed"
-cmake --build "$BUILD" --target "$FLAVOUR" -j >/dev/null \
+cmake --build "$BUILD" --target "$FLAVOUR" "$CHECKS" -j >/dev/null \
   || die "build failed"
 BIN="$BUILD/$FLAVOUR"
 [ -x "$BIN" ] || die "binary not produced: $BIN"
+
+# ---------------------------------------------------------------------------
+# 1a. Engine checks: managed-heap bounds validation and errno preservation in
+#     the write-fault handler. Fast, single process; any failure stops the lab.
+# ---------------------------------------------------------------------------
+mkdir -p "$OUTDIR"
+info "running engine checks ($CHECKS)…"
+set +e
+CHK_RAW="$("$BUILD/$CHECKS" "$OUTDIR" 2>&1)"
+CHK_RC=$?
+set -e
+echo "$CHK_RAW" | grep -E 'FAIL|skip' | sed 's/^/    /' || true
+echo "$CHK_RAW" | grep '^CHECKS ' | sed 's/^/    /' || true
+[ "$CHK_RC" = 0 ] || die "engine checks failed (rc=$CHK_RC):
+$CHK_RAW"
 
 # ---------------------------------------------------------------------------
 # 1b. --sweep: a single data point cannot prove O(1). Run the whole
