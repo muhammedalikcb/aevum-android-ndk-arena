@@ -2,6 +2,7 @@
 #include "dirty_tracker.h"
 
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +19,9 @@ namespace {
 // A process-global registry the signal handler consults to decide whether a
 // fault belongs to an armed arena. Fixed size and lock-free on the read path so
 // the handler is async-signal-safe: it only performs atomic loads, one atomic
-// fetch_or, and a single mprotect (a bare syscall with no libc state).
+// fetch_or, and a single mprotect. errno is saved on entry and restored on every
+// exit path, so neither our mprotect nor a chained handler can clobber the value
+// the interrupted code was about to read.
 constexpr int kMaxSlots = 8;
 
 struct Slot {
@@ -59,6 +62,7 @@ void chainTo(struct sigaction* prev, int sig, siginfo_t* si, void* uctx) {
 }
 
 void faultHandler(int sig, siginfo_t* si, void* uctx) {
+  const int saved_errno = errno;
   auto* addr = static_cast<uint8_t*>(si ? si->si_addr : nullptr);
   if (addr) {
     for (int i = 0; i < kMaxSlots; ++i) {
@@ -76,11 +80,16 @@ void faultHandler(int sig, siginfo_t* si, void* uctx) {
         g_slots[i].bits[pidx >> 6].fetch_or(1ull << (pidx & 63), std::memory_order_relaxed);
         // Unprotect exactly this page and let the faulting store retry.
         ::mprotect(page, static_cast<size_t>(ps), PROT_READ | PROT_WRITE);
+        errno = saved_errno;
         return;
       }
     }
   }
+  // Hand the previous handler the errno the interrupted code saw, then put it
+  // back afterwards in case that handler returns (it may have fixed the fault).
+  errno = saved_errno;
   chainTo(sig == SIGBUS ? &g_prev_bus : &g_prev_segv, sig, si, uctx);
+  errno = saved_errno;
 }
 
 bool installHandlerOnce() {
