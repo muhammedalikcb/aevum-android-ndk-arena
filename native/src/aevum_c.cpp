@@ -148,6 +148,9 @@ void aev_mh_end_write(aev_mheap* h) { if (h) mself(h)->endWrite(); }
 aev_handle aev_mh_ref_of(aev_mheap* h, void* payload) {
   return h ? mself(h)->refOf(payload).off : AEV_NULL;
 }
+uint64_t aev_mh_capacity(aev_mheap* h, aev_handle ref) {
+  return h ? mself(h)->payloadBytes(ManagedRef{ref}) : 0;
+}
 int32_t aev_mh_set_root(aev_mheap* h, uint32_t idx, aev_handle ref) {
   return h ? static_cast<int32_t>(mself(h)->setRoot(idx, ManagedRef{ref})) : AEV_INVALID_ARG;
 }
@@ -155,7 +158,7 @@ aev_handle aev_mh_get_root(aev_mheap* h, uint32_t idx) {
   return h ? mself(h)->getRoot(idx).off : AEV_NULL;
 }
 aev_handle aev_mh_read_ref(aev_mheap* h, aev_handle ref, uint32_t field_offset) {
-  if (!h) return AEV_NULL;
+  if (!h || !mself(h)->refFieldOk(ManagedRef{ref}, field_offset)) return AEV_NULL;
   void* payload = mself(h)->resolveRead(ManagedRef{ref});
   if (!payload) return AEV_NULL;
   auto* fld = reinterpret_cast<SelfHealingRefBase*>(static_cast<uint8_t*>(payload) + field_offset);
@@ -163,7 +166,8 @@ aev_handle aev_mh_read_ref(aev_mheap* h, aev_handle ref, uint32_t field_offset) 
   return child ? mself(h)->refOf(child).off : AEV_NULL;
 }
 int32_t aev_mh_write_ref(aev_mheap* h, aev_handle ref, uint32_t field_offset, aev_handle child) {
-  if (!h) return AEV_INVALID_ARG;
+  if (!h || !mself(h)->refFieldOk(ManagedRef{ref}, field_offset)) return AEV_INVALID_ARG;
+  if (child && !mself(h)->refInHeap(ManagedRef{child})) return AEV_INVALID_ARG;
   void* payload = mself(h)->beginWrite(ManagedRef{ref});
   if (!payload) { mself(h)->endWrite(); return AEV_INVALID_ARG; }
   void* childp = child ? mself(h)->resolveRead(ManagedRef{child}) : nullptr;

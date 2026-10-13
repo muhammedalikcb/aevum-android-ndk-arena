@@ -88,10 +88,13 @@ AEV_API aev_mheap* aev_mh_attach(aev_arena* a, int32_t* status);
 AEV_API void       aev_mh_close(aev_mheap* h);
 
 AEV_API aev_handle aev_mh_alloc(aev_mheap* h, uint32_t type_id);   /* managed ref, or 0 */
-AEV_API void*      aev_mh_read(aev_mheap* h, aev_handle ref);      /* canonical read ptr */
+AEV_API void*      aev_mh_read(aev_mheap* h, aev_handle ref);      /* canonical read ptr, NULL if ref is outside the heap */
 AEV_API void*      aev_mh_begin_write(aev_mheap* h, aev_handle ref); /* pair w/ end_write */
 AEV_API void       aev_mh_end_write(aev_mheap* h);
 AEV_API aev_handle aev_mh_ref_of(aev_mheap* h, void* canonical_payload);
+/* Allocated payload bytes of the object (registered size rounded up to 16), or 0
+ * if `ref` is not inside the heap. Use it to size a view of the object. */
+AEV_API uint64_t   aev_mh_capacity(aev_mheap* h, aev_handle ref);
 
 AEV_API int32_t    aev_mh_set_root(aev_mheap* h, uint32_t idx, aev_handle ref);
 AEV_API aev_handle aev_mh_get_root(aev_mheap* h, uint32_t idx);
@@ -99,7 +102,10 @@ AEV_API aev_handle aev_mh_get_root(aev_mheap* h, uint32_t idx);
 /* Resolve the reference field at `field_offset` inside object `ref` to the child
  * managed ref (following forwarding), or set it. These wrap the self-healing
  * pointer + WriteScope so a JVM caller can walk and mutate the graph without
- * touching pointer internals. */
+ * touching pointer internals. `field_offset` must be one of the offsets the
+ * object's type registered (or, for a natively traced type, an aligned field
+ * inside the object); otherwise read_ref returns AEV_NULL and write_ref returns
+ * AEV_INVALID_ARG without touching the object. */
 AEV_API aev_handle aev_mh_read_ref(aev_mheap* h, aev_handle ref, uint32_t field_offset);
 AEV_API int32_t    aev_mh_write_ref(aev_mheap* h, aev_handle ref, uint32_t field_offset,
                                     aev_handle child);

@@ -123,6 +123,21 @@ class TypeRegistry {
     return slots()[type_id].size.load(std::memory_order_relaxed);
   }
 
+  // True if `field_offset` may be used as a reference field of `type_id`. For a
+  // layout-registered type it must be one of the registered offsets; for a type
+  // with a native TraceFn the registry cannot see the fields, so the caller's
+  // size check is the only guard. Unregistered types have no reference fields.
+  static bool isRefField(uint32_t type_id, uint32_t field_offset) noexcept {
+    if (type_id >= kMaxTypes) return false;
+    Slot& s = slots()[type_id];
+    if (s.trace.load(std::memory_order_acquire) != nullptr) return true;
+    if (!s.has_layout.load(std::memory_order_acquire)) return false;
+    const uint32_t n = s.num_offsets;
+    for (uint32_t i = 0; i < n; ++i)
+      if (s.offsets[i] == field_offset) return true;
+    return false;
+  }
+
   // The single tracing entry point used everywhere in the compactor: dispatch to
   // a registered native TraceFn, or walk registered field offsets. Either way,
   // every reference field of `payload` is handed to `visit`.
